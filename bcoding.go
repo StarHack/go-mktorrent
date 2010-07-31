@@ -10,9 +10,15 @@ type BCode interface {
 }
 
 type BString string
+type BBytes []uint8
 type BUint uint
 type BList []BCode
 type BMap map[string]BCode
+
+func (bytes BBytes) renderBCode(w *bufio.Writer) {
+	w.WriteString(fmt.Sprintf("%d:", len(bytes)))
+	w.Write(bytes)
+}
 
 func (s BString) renderBCode(w *bufio.Writer) {
 	w.WriteString(fmt.Sprintf("%d:%s", len(s), s))
@@ -24,8 +30,8 @@ func (u BUint) renderBCode(w *bufio.Writer) {
 
 func (l BList) renderBCode(w *bufio.Writer) {
 	w.WriteString("l")
-	for _, e := range l {
-		e.renderBCode(w)
+	for i := range l {
+		l[i].renderBCode(w)
 	}
 	w.WriteString("e")
 }
