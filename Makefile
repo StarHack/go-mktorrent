@@ -13,7 +13,7 @@ clean-torrent:
 	rm test.torrent
 
 mktorrent-test:
-	mktorrent -a 'http://www.foo.com' -l 20 test
+	/usr/bin/time mktorrent -a 'http://www.foo.com' -l 20 test
 
 go-mktorrent-test:
-	./gomktorrent -a 'http://www.foo.com' -t 'out.torrent' test
+	/usr/bin/time ./gomktorrent -a 'http://www.foo.com' -t 'out.torrent' test
