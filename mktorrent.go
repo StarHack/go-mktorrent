@@ -4,8 +4,8 @@ package main
  * TODO:
  * ; The path handling could take some extra work
  *    - the current setup is a quick hack from Hades.
- * ; Change the default chunk reader size from 1 megabyte.
- * ; Parallellize the code. We can use a pool of workers to carry out hashing for us.
+ * ; Eliminate the copying that goes on in the default case. If a complete slice can
+ *   be stolen right off of the array, do that rather than copying.
  */
 
 import (
@@ -24,21 +24,22 @@ var (
 	torrentFilename = flag.String("t", "", "Name of the torrent file")
 	pieceSize       = flag.Uint("p", defaultPieceSize,
 		"Piece size to use for creating the torrent file (Kilobytes)")
-	fileList        = list.New()
-	filesVisited    = 0
-	multiFile       = false
+	fileList     = list.New()
+	piecesMap    = make(map[uint][]byte, 400)
+	filesVisited = 0
+	multiFile    = false
 )
 
 const (
 	version          = "0.2"
-	worker_count     = 2
+	workerCount      = 2
 	sizeMultiplier   = 1024 // Default value to multiply the size argument by
 	defaultPieceSize = 1024 // Default value of the piece size of none is given
 )
 
-/* The bufferchunk defines a block for SHA1 checksum encoding. */
 type bufferChunk struct {
-	p []byte
+	chunk []byte
+	n uint
 }
 
 /* The fileBlock defines the information about a new file */
@@ -48,8 +49,9 @@ type fileBlock struct {
 }
 
 type torrentCreator struct {
-	pCh chan *bufferChunk
+	pCh   chan []byte
 	pDone chan string
+	hCh   chan *bufferChunk
 }
 
 func (tc *torrentCreator) VisitFile(path string, fi *os.FileInfo) {
@@ -80,7 +82,7 @@ func (tc *torrentCreator) VisitDir(path string, f *os.FileInfo) bool {
 	return true
 }
 
-func sha1File(f *os.File, c chan *bufferChunk) {
+func sha1File(f *os.File, c chan []byte) {
 	chunkSize := *pieceSize * sizeMultiplier
 	buf := bufio.NewReader(f)
 
@@ -89,9 +91,7 @@ func sha1File(f *os.File, c chan *bufferChunk) {
 		n, err := buf.Read(p)
 		if uint(n) < chunkSize {
 			if err == os.EOF {
-				m := new(bufferChunk)
-				m.p = p[0:n]
-				c <- m
+				c <- p[0:n]
 				break
 			}
 		}
@@ -100,10 +100,7 @@ func sha1File(f *os.File, c chan *bufferChunk) {
 			panic(err)
 		}
 
-		m := new(bufferChunk)
-		m.p = p
-
-		c <- m
+		c <- p
 	}
 }
 
@@ -112,64 +109,92 @@ func headerString() string {
 	return ("This is go-mkTorrent version " + version + "\n")
 }
 
-type msg struct {
-	i int
-	p []byte
-	rslice []uint8
+func pieceAdder(res chan string) chan *bufferChunk {
+	c := make(chan *bufferChunk, 3)
+	go func() {
+		i := 0
+		for m := range c {
+			piecesMap[m.n] = m.chunk
+			i++
+		}
+
+		r := make([]byte, i*20)
+		for k, v:= range piecesMap {
+			copy(r[k:k+20], v)
+		}
+
+		res <- string(r)
+	}()
+
+	return c
 }
 
-func hasher(c chan *bufferChunk, done chan string) {
+func hashWorker(in chan *bufferChunk, out chan *bufferChunk, done chan bool) {
 	hash := sha1.New()
-	var pushed uint = 0
-	lst := list.New()
+	for m := range in {
+		hash.Write(m.chunk)
+		m.chunk = hash.Sum()
+		out <- m
+		hash.Reset()
+	}
+
+	done <- true
+}
+
+func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
+
+	out := pieceAdder(res)
+	workerDone := make([]chan bool, workerCount)
+	for i := range workerDone {
+		workerDone[i] = make(chan bool)
+		go hashWorker(hashC, out, workerDone[i])
+	}
+
 	chunkSize := *pieceSize * sizeMultiplier
-	remaining := chunkSize
+	point := uint(0)
+	chunk := make([]byte, chunkSize)
+
+	n := uint(0)
 	for x := range c {
-		p := x.p
-		l := uint(len(p))
 		for {
-			if l < remaining {
+			l := uint(len(x))
+			if l < chunkSize-point {
 				// Not enough for the next piece
-				hash.Write(p)
-				pushed += l
-				remaining -= l
+				copy(chunk[point:(point+l)], x)
+				point += l
 				break
 			} else {
 				// Enough for the next piece
-				hash.Write(p[0:remaining])
-				z := hash.Sum()
-				lst.PushBack(z)
-				hash.Reset()
-				pushed = 0
-				remaining = chunkSize
-				if remaining == l {
-					break // Next piece, please
-				}
-				p = p[remaining:]
+				toTake := chunkSize - point
+				copy(chunk[point:(point+toTake)], x[0:chunkSize-point])
+				x = x[chunkSize-point:]
+
+				bc := new(bufferChunk)
+				bc.chunk = chunk
+				bc.n = n
+				n++
+				hashC <- bc
+				chunk = make([]byte, chunkSize)
+				point = 0
 			}
 		}
 	}
+	close(hashC)
 
-	if pushed > 0 {
-		z := hash.Sum()
-		lst.PushBack(z)
+	for i := range workerDone {
+		<-workerDone[i]
 	}
-
-	r := ""
-	for x := range lst.Iter() {
-		r += string(x.([]byte))
-	}
-
-	done <- r
+	close(out)
 }
 
-func newVisitor() *torrentCreator {
+func newVisitor() (*torrentCreator, chan string) {
 	v := new(torrentCreator)
-	v.pCh = make(chan *bufferChunk, 10)
-	v.pDone = make(chan string)
+	v.pCh = make(chan []byte, 3)
+	v.hCh = make(chan *bufferChunk, 3)
 
-	go hasher(v.pCh, v.pDone)
-	return v
+	res := make(chan string)
+	go hasher(v.pCh, v.hCh, res)
+	return v, res
 }
 
 func main() {
@@ -186,16 +211,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	v := newVisitor()
+	v, resC := newVisitor()
 	errC := make(chan os.Error)
 	go func() {
-		err := <- errC
+		err := <-errC
 		panic(err)
 	}()
 
 	// Try to open the torrent file. If this fails, it ensures we fail long before the
 	// hashing commences.
-	f, err := os.Open(*torrentFilename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0660)
+	f, err := os.Open(*torrentFilename, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0660)
 	if err != nil {
 		panic(err)
 	}
@@ -206,17 +231,17 @@ func main() {
 		path.Walk(args[i], v, errC)
 	}
 
-	writeTorrent(v, f)
+	writeTorrent(v, f, resC)
 }
 
-func writeTorrent(v *torrentCreator, f *os.File) {
+func writeTorrent(v *torrentCreator, f *os.File, res chan string) {
 	close(v.pCh)
 
 	aUrl := BString(*announceUrl)
-	pStr := BString(<- v.pDone)
+	pStr := BString(<-res)
 
-	info := map[string]BCode {
-		"pieces" : pStr,
+	info := map[string]BCode{
+		"pieces": pStr,
 	}
 
 	if multiFile {
@@ -226,25 +251,25 @@ func writeTorrent(v *torrentCreator, f *os.File) {
 		for fb := range fileList.Iter() {
 			b := fb.(*fileBlock)
 			length += b.size
-			d := map[string]BCode {
-				"length" : BUint(b.size),
-				"path"   : BString(b.path),
+			d := map[string]BCode{
+				"length": BUint(b.size),
+				"path":   BString(b.path),
 			}
 			b_list[i] = BMap(d)
 			i++
 		}
 
-		info["files"]  = BList(b_list)
+		info["files"] = BList(b_list)
 		info["length"] = BUint(length)
 	} else {
 		b := fileList.Front().Value.(*fileBlock)
 		info["length"] = BUint(b.size)
-		info["name"]   = BString(b.path)
+		info["name"] = BString(b.path)
 	}
 
-	m := map[string]BCode {
-		"announce" : aUrl,
-		"info"     : BMap(info),
+	m := map[string]BCode{
+		"announce": aUrl,
+		"info":     BMap(info),
 	}
 
 	if *comment != "" {
