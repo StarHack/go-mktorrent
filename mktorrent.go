@@ -50,7 +50,7 @@ type fileBlock struct {
 
 type torrentCreator struct {
 	pCh   chan []byte
-	pDone chan string
+	pDone chan []byte
 	hCh   chan *bufferChunk
 }
 
@@ -109,7 +109,7 @@ func headerString() string {
 	return ("This is go-mkTorrent version " + version + "\n")
 }
 
-func pieceAdder(res chan string) chan *bufferChunk {
+func pieceAdder(res chan []byte) chan *bufferChunk {
 	c := make(chan *bufferChunk, 3)
 	go func() {
 		i := 0
@@ -120,10 +120,10 @@ func pieceAdder(res chan string) chan *bufferChunk {
 
 		r := make([]byte, i*20)
 		for k, v:= range piecesMap {
-			copy(r[k:k+20], v)
+			copy(r[k*20:k*20+20], v)
 		}
 
-		res <- string(r)
+		res <- r
 	}()
 
 	return c
@@ -141,7 +141,7 @@ func hashWorker(in chan *bufferChunk, out chan *bufferChunk, done chan bool) {
 	done <- true
 }
 
-func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
+func hasher(c chan []byte, hashC chan *bufferChunk, res chan []byte) {
 
 	out := pieceAdder(res)
 	workerDone := make([]chan bool, workerCount)
@@ -157,31 +157,44 @@ func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
 	n := uint(0)
 	for x := range c {
 		for {
+			if chunk == nil {
+				chunk = make([]byte, chunkSize)
+			}
+
 			l := uint(len(x))
-			if l < chunkSize-point {
+			remaining := chunkSize - point
+			if l < remaining {
 				// Not enough for the next piece
 				copy(chunk[point:(point+l)], x)
 				point += l
 				break
 			} else {
 				// Enough for the next piece
-				toTake := chunkSize - point
-				copy(chunk[point:(point+toTake)], x[0:toTake])
+				copy(chunk[point:(point+remaining)], x[0:remaining])
 				bc := new(bufferChunk)
 				bc.chunk = chunk
 				bc.n = n
 				n++
 				hashC <- bc
-				chunk = make([]byte, chunkSize)
+				chunk = nil
 				point = 0
-				if l == toTake {
+				if l == remaining {
 					break
 				} else {
-					x = x[toTake:]
+					x = x[remaining:]
 				}
 			}
 		}
 	}
+
+	if chunk != nil {
+		bc := new(bufferChunk)
+		bc.chunk = chunk[0:point]
+		bc.n = n
+		n++
+		hashC <- bc
+	}
+
 	close(hashC)
 
 	for i := range workerDone {
@@ -190,12 +203,12 @@ func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
 	close(out)
 }
 
-func newVisitor() (*torrentCreator, chan string) {
+func newVisitor() (*torrentCreator, chan []byte) {
 	v := new(torrentCreator)
 	v.pCh = make(chan []byte, 3)
 	v.hCh = make(chan *bufferChunk, 3)
 
-	res := make(chan string)
+	res := make(chan []byte)
 	go hasher(v.pCh, v.hCh, res)
 	return v, res
 }
@@ -237,15 +250,19 @@ func main() {
 	writeTorrent(v, f, resC)
 }
 
-func writeTorrent(v *torrentCreator, f *os.File, res chan string) {
+func writeTorrent(v *torrentCreator, f *os.File, res chan []byte) {
 	close(v.pCh)
 
 	aUrl := BString(*announceUrl)
-	pStr := BString(<-res)
+	pStr := BBytes(<-res)
 
+	chunkSize := BUint(*pieceSize * sizeMultiplier)
 	info := map[string]BCode{
-		"pieces": pStr,
+		"pieces" : pStr,
+		"piece length" : chunkSize,
 	}
+
+
 
 	if multiFile {
 		var length int64 = 0
