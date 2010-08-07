@@ -83,7 +83,7 @@ func (tc *torrentCreator) VisitDir(path string, f *os.FileInfo) bool {
 }
 
 func sha1File(f *os.File, c chan []byte) {
-	chunkSize := *pieceSize * sizeMultiplier
+	chunkSize := uint(4096 * 1024)
 	buf := bufio.NewReader(f)
 
 	for {
