@@ -166,9 +166,7 @@ func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
 			} else {
 				// Enough for the next piece
 				toTake := chunkSize - point
-				copy(chunk[point:(point+toTake)], x[0:chunkSize-point])
-				x = x[chunkSize-point:]
-
+				copy(chunk[point:(point+toTake)], x[0:toTake])
 				bc := new(bufferChunk)
 				bc.chunk = chunk
 				bc.n = n
@@ -176,6 +174,11 @@ func hasher(c chan []byte, hashC chan *bufferChunk, res chan string) {
 				hashC <- bc
 				chunk = make([]byte, chunkSize)
 				point = 0
+				if l == toTake {
+					break
+				} else {
+					x = x[toTake:]
+				}
 			}
 		}
 	}
