@@ -14,8 +14,9 @@ import (
 	"bufio"
 	"fmt"
 	"flag"
+	"io"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 var (
@@ -62,23 +63,23 @@ func (tc *torrentCreator) VisitFile(path string, fi *os.FileInfo) {
 
 	k := new(fileBlock)
 	k.path = path
-	k.size = fi.Size
+	k.size = (*fi).Size()
 
-	f, err := os.Open(path, os.O_RDONLY, 0)
+	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
 	fileList.PushBack(k)
-	fmt.Printf("Visited file %s at path %s\n", fi.Name, path)
+	fmt.Printf("Visited file %s at path %s\n", (*fi).Name(), path)
 	sha1File(f, tc.pCh)
 }
 
 func (tc *torrentCreator) VisitDir(path string, f *os.FileInfo) bool {
 	multiFile = true
 
-	fmt.Printf("Visited directory %s at path %s\n", f.Name, path)
+	fmt.Printf("Visited directory %s at path %s\n", (*f).Name(), path)
 	return true
 }
 
@@ -90,7 +91,7 @@ func sha1File(f *os.File, c chan []byte) {
 		p := make([]uint8, chunkSize)
 		n, err := buf.Read(p)
 		if uint(n) < chunkSize {
-			if err == os.EOF {
+			if err == io.EOF {
 				c <- p[0:n]
 				break
 			}
@@ -110,6 +111,7 @@ func headerString() string {
 }
 
 func pieceAdder(res chan []byte) chan *bufferChunk {
+	fmt.Printf("Adding a piece\n")
 	c := make(chan *bufferChunk, 3)
 	go func() {
 		i := 0
@@ -133,7 +135,7 @@ func hashWorker(in chan *bufferChunk, out chan *bufferChunk, done chan bool) {
 	hash := sha1.New()
 	for m := range in {
 		hash.Write(m.chunk)
-		m.chunk = hash.Sum()
+		m.chunk = hash.Sum(m.chunk) // TODO?
 		out <- m
 		hash.Reset()
 	}
@@ -142,6 +144,8 @@ func hashWorker(in chan *bufferChunk, out chan *bufferChunk, done chan bool) {
 }
 
 func hasher(c chan []byte, hashC chan *bufferChunk, res chan []byte) {
+
+	fmt.Printf("Hashing a piece\n")
 
 	out := pieceAdder(res)
 	workerDone := make([]chan bool, workerCount)
@@ -223,12 +227,12 @@ func main() {
 	}
 
 	if *torrentFilename == "" {
-		fmt.Fprintf(os.Stderr, "Must supply a torrent file name to produce.\n")
+		fmt.Fprintf(os.Stderr, "Must supply a torrent file name to produce (-t).\n")
 		os.Exit(1)
 	}
 
 	v, resC := newVisitor()
-	errC := make(chan os.Error)
+	errC := make(chan error)
 	go func() {
 		err := <-errC
 		panic(err)
@@ -236,7 +240,8 @@ func main() {
 
 	// Try to open the torrent file. If this fails, it ensures we fail long before the
 	// hashing commences.
-	f, err := os.Open(*torrentFilename, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0660)
+	//f, err := os.Open(*torrentFilename, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0660) // TODO
+	f, err := os.Create(*torrentFilename)
 	if err != nil {
 		panic(err)
 	}
@@ -244,7 +249,16 @@ func main() {
 
 	args := flag.Args()
 	for i := range args {
-		path.Walk(args[i], v, errC)
+		/// path.Walk(args[i], v, errC)      // TODO?
+		filepath.Walk(args[i], func(path string, info os.FileInfo, err error) error {
+			if info.IsDir() {
+				return nil
+			} else {
+				v.VisitFile(info.Name(), &info)
+			}
+			
+			return nil
+		})
 	}
 
 	writeTorrent(v, f, resC)
@@ -262,14 +276,17 @@ func writeTorrent(v *torrentCreator, f *os.File, res chan []byte) {
 		"piece length" : chunkSize,
 	}
 
+	fmt.Printf("Pieces: %s\n", pStr)
+
 
 
 	if multiFile {
 		var length int64 = 0
 		b_list := make([]BCode, filesVisited)
 		i := 0
-		for fb := range fileList.Iter() {
-			b := fb.(*fileBlock)
+		// for fb := range fileList.Iter() { // TODO?
+		for fb := fileList.Front(); fb != nil; fb = fb.Next() {
+			b := fb.Value.(*fileBlock)
 			length += b.size
 			d := map[string]BCode{
 				"length": BUint(b.size),
