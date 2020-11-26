@@ -11,18 +11,23 @@ package main
 import (
 	"container/list"
 	"crypto/sha1"
+	//"bytes"
 	"bufio"
 	"fmt"
 	"flag"
 	"io"
-	"os"
+	"path"
 	"path/filepath"
+	"os"
+	//"path/filepath"
+	bencode "github.com/jackpal/bencode-go"
 )
 
 var (
 	comment         = flag.String("c", "", "Comment to use (optional")
 	announceUrl     = flag.String("a", "", "Announce URL to use")
 	torrentFilename = flag.String("t", "", "Name of the torrent file")
+	directory       = flag.String("d", "", "Source directory")
 	pieceSize       = flag.Uint("p", defaultPieceSize,
 		"Piece size to use for creating the torrent file (Kilobytes)")
 	fileList     = list.New()
@@ -38,188 +43,184 @@ const (
 	defaultPieceSize = 1024 // Default value of the piece size of none is given
 )
 
-type bufferChunk struct {
-	chunk []byte
-	n uint
+type TorrentFile struct {
+	announce   		string
+	created_by 		string
+	creation_data int64
+	info          map[string]interface{}
 }
 
-/* The fileBlock defines the information about a new file */
-type fileBlock struct {
-	path string
-	size int64
+type File struct {
+	length 				int64
+	path          [1]string
 }
 
-type torrentCreator struct {
-	pCh   chan []byte
-	pDone chan []byte
-	hCh   chan *bufferChunk
+func NewFile(path string, length int64) File {
+	var file File
+	file.length = length
+	file.path[0] = path
+	return file
 }
 
-func (tc *torrentCreator) VisitFile(path string, fi *os.FileInfo) {
-	filesVisited++
-	if filesVisited > 1 {
-		multiFile = true
-	}
+func AddFileToList(files []File, file File) []File {
+	target := make([]File, len(files)+1)
+	copy(target, files)
+	target[len(files)] = file
+	return target
+}
 
-	k := new(fileBlock)
-	k.path = path
-	k.size = (*fi).Size()
+func NewTorrentFile() (map[string]interface{}, map[string]interface{}, []File) {
+	var tf = make(map[string]interface{})
+	
+	tf["info"] = make(map[string]interface{})
+	info, _ := tf["info"].(map[string]interface{})
 
-	f, err := os.Open(path)
+	//info["files"] = make(map[string]interface{})
+	//files, _ := info["files"].(map[string]interface{})
+	var files []File
+	info["files"] = files
+	//files, _ := info["files"].(map[string]interface{})
+
+	return tf, info, files
+}
+/*
+func HashFile(name string, chunksize int) []byte {
+	data, err := os.Open(name)
 	if err != nil {
-		panic(err)
+		// log.Fatal("Error Reading ", filename, ": ", err)	
 	}
-	defer f.Close()
+	defer data.Close()
 
-	fileList.PushBack(k)
-	fmt.Printf("Visited file %s at path %s\n", (*fi).Name(), path)
-	sha1File(f, tc.pCh)
-}
+	reader := bufio.NewReader(data)
+	// buffer := bytes.NewBuffer(make([]byte, 0))
+	buffer := make([]byte, chunksize)
 
-func (tc *torrentCreator) VisitDir(path string, f *os.FileInfo) bool {
-	multiFile = true
-
-	fmt.Printf("Visited directory %s at path %s\n", (*f).Name(), path)
-	return true
-}
-
-func sha1File(f *os.File, c chan []byte) {
-	chunkSize := uint(4096 * 1024)
-	buf := bufio.NewReader(f)
+	hash := sha1.New()
+	var ret []byte
+	var sum []byte
 
 	for {
-		p := make([]uint8, chunkSize)
-		n, err := buf.Read(p)
-		if uint(n) < chunkSize {
-			if err == io.EOF {
-				c <- p[0:n]
-				break
-			}
-		}
-
+		read, err := reader.Read(buffer);
 		if err != nil {
-			panic(err)
+			break;
 		}
 
-		c <- p
+		hash.Write(buffer[0:read])
+		// hash.Write(buffer[0:read]) // only for testing multi file hashes
+		//str := fmt.Sprintf("% X", hash.Sum(nil))
+		sum = hash.Sum(nil)
+		ret = append(ret[:], sum[:]...)
+		hash.Reset()
+		//ret += str
 	}
-}
 
+	// fmt.Println(part)
+
+	if err != io.EOF {
+		/// log.Fatal("Error Reading ", filename, ": ", err)	
+	} else {
+		err = nil
+	}
+
+	fmt.Println(ret)
+
+	return ret
+}*/
+
+func HashFiles(files []File, chunksize int) []byte {
+	hash := sha1.New()
+	var ret []byte
+	var sum []byte
+
+	pieceBytes := 0
+
+	for _, file := range files {
+		//filepath := path.Join(*directory, file.path[0])
+		filepath := path.Join("", file.path[0])
+		data, err := os.Open(filepath)
+		if err != nil {
+			fmt.Println("Error Reading ", filepath, ": ", err)	
+		}
+		defer data.Close()
+
+		reader := bufio.NewReader(data)
+		// buffer := bytes.NewBuffer(make([]byte, 0))
+		buffer := make([]byte, chunksize)
+
+		
+
+		for {
+			read, err := reader.Read(buffer);
+			
+			if err != nil {
+				break;
+			}
+
+			pieceBytes = pieceBytes + read
+
+			if pieceBytes > chunksize {
+				exceedingBytes := pieceBytes - chunksize
+				remainingPieceBytes := chunksize - (pieceBytes - read)
+
+				// Write remaining bytes to fill up piece
+				hash.Write(buffer[0:remainingPieceBytes])
+				sum = hash.Sum(nil)
+				ret = append(ret[:], sum[:]...)
+				hash.Reset()
+
+				// Write exceeding bytes into new piece
+				hash.Write(buffer[remainingPieceBytes:])
+				sum = hash.Sum(nil)
+				// ret = append(ret[:], sum[:]...)
+				//hash.Reset()
+
+				// Set pieceBytes to new value
+				pieceBytes = exceedingBytes
+			} else {
+
+				hash.Write(buffer[0:read])
+				sum = hash.Sum(nil)
+				// ret = append(ret[:], sum[:]...)
+				// hash.Reset()
+			}
+
+			// hash.Write(buffer[0:read]) // only for testing multi file hashes
+			//str := fmt.Sprintf("% X", hash.Sum(nil))
+			
+			
+
+			//ret += str
+		}
+
+		// fmt.Println(part)
+
+		if err != io.EOF {
+			/// log.Fatal("Error Reading ", filename, ": ", err)	
+		} else {
+			err = nil
+		}
+
+	}
+
+	ret = append(ret[:], sum[:]...)
+
+	fmt.Println(ret)
+
+	return ret
+}
 
 func headerString() string {
-	return ("This is go-mkTorrent version " + version + "\n")
+	return "This is go-mkTorrent version " + version + "\n"
 }
 
-func pieceAdder(res chan []byte) chan *bufferChunk {
-	fmt.Printf("Adding a piece\n")
-	c := make(chan *bufferChunk, 3)
-	go func() {
-		i := 0
-		for m := range c {
-			piecesMap[m.n] = m.chunk
-			i++
-		}
-
-		r := make([]byte, i*20)
-		for k, v:= range piecesMap {
-			copy(r[k*20:k*20+20], v)
-		}
-
-		res <- r
-	}()
-
-	return c
-}
-
-func hashWorker(in chan *bufferChunk, out chan *bufferChunk, done chan bool) {
-	hash := sha1.New()
-	for m := range in {
-		hash.Write(m.chunk)
-		m.chunk = hash.Sum(m.chunk) // TODO?
-		out <- m
-		hash.Reset()
-	}
-
-	done <- true
-}
-
-func hasher(c chan []byte, hashC chan *bufferChunk, res chan []byte) {
-
-	fmt.Printf("Hashing a piece\n")
-
-	out := pieceAdder(res)
-	workerDone := make([]chan bool, workerCount)
-	for i := range workerDone {
-		workerDone[i] = make(chan bool)
-		go hashWorker(hashC, out, workerDone[i])
-	}
-
-	chunkSize := *pieceSize * sizeMultiplier
-	point := uint(0)
-	chunk := make([]byte, chunkSize)
-
-	n := uint(0)
-	for x := range c {
-		for {
-			if chunk == nil {
-				chunk = make([]byte, chunkSize)
-			}
-
-			l := uint(len(x))
-			remaining := chunkSize - point
-			if l < remaining {
-				// Not enough for the next piece
-				copy(chunk[point:(point+l)], x)
-				point += l
-				break
-			} else {
-				// Enough for the next piece
-				copy(chunk[point:(point+remaining)], x[0:remaining])
-				bc := new(bufferChunk)
-				bc.chunk = chunk
-				bc.n = n
-				n++
-				hashC <- bc
-				chunk = nil
-				point = 0
-				if l == remaining {
-					break
-				} else {
-					x = x[remaining:]
-				}
-			}
-		}
-	}
-
-	if chunk != nil {
-		bc := new(bufferChunk)
-		bc.chunk = chunk[0:point]
-		bc.n = n
-		n++
-		hashC <- bc
-	}
-
-	close(hashC)
-
-	for i := range workerDone {
-		<-workerDone[i]
-	}
-	close(out)
-}
-
-func newVisitor() (*torrentCreator, chan []byte) {
-	v := new(torrentCreator)
-	v.pCh = make(chan []byte, 3)
-	v.hCh = make(chan *bufferChunk, 3)
-
-	res := make(chan []byte)
-	go hasher(v.pCh, v.hCh, res)
-	return v, res
+func log(obj interface{}) {
+  fmt.Printf("%+v\n", obj)
 }
 
 func main() {
 	flag.Parse()
 	fmt.Printf(headerString())
+
 	// Flag Testing
 	if *announceUrl == "" {
 		fmt.Fprintf(os.Stderr, "Must supply an Announce URL parameter (-a).\n")
@@ -231,89 +232,67 @@ func main() {
 		os.Exit(1)
 	}
 
-	v, resC := newVisitor()
-	errC := make(chan error)
-	go func() {
-		err := <-errC
-		panic(err)
-	}()
+	if *directory == "" {
+		fmt.Fprintf(os.Stderr, "Must supply a source directory (-d).\n")
+		os.Exit(1)
+	}
 
-	// Try to open the torrent file. If this fails, it ensures we fail long before the
-	// hashing commences.
-	//f, err := os.Open(*torrentFilename, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0660) // TODO
-	f, err := os.Create(*torrentFilename)
+
+
+	trfile, _ := os.Open("Just_Dance_2021_Update_v322043.561500_NSW-NiiNTENDO.torrent")
+	reader := bufio.NewReader(trfile)
+	//var data interface{}
+	data, _ := bencode.Decode(reader)
+
+
+
+	chunksize := 16384 // 16777216
+
+	torrentFile, info, files := NewTorrentFile()
+	torrentFile["announce"] = "https://tntracker.org/announce.php"
+	torrentFile["created by"] = "txtx"
+	torrentFile["creation date"] = 1605292896
+	// torrentFile.info["info"] = TODO
+	info["name"] = "MY_DIR_NAME-ANY"
+	info["piece length"] = chunksize
+
+	err := filepath.Walk(*directory, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		files = AddFileToList(files, NewFile(path, info.Size()))
+		return nil
+	})
+
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
 
-	args := flag.Args()
-	for i := range args {
-		/// path.Walk(args[i], v, errC)      // TODO?
-		filepath.Walk(args[i], func(path string, info os.FileInfo, err error) error {
-			if info.IsDir() {
-				return nil
-			} else {
-				v.VisitFile(info.Name(), &info)
-			}
-			
-			return nil
-		})
-	}
+	//files = AddFileToList(files, NewFile("test.txt", 5))
+	//files = AddFileToList(files, NewFile("test2.txt", 5))
+	info["files"] = files
+	// files[0] = NewFile("n-jd2k21_v65536.r00", 100000000)
 
-	writeTorrent(v, f, resC)
-}
+	
 
-func writeTorrent(v *torrentCreator, f *os.File, res chan []byte) {
-	close(v.pCh)
+  // tst := []byte {0x48, 0x0E, 0x8A, 0x07, 0x8B, 0xE3, 0xBE, 0x28, 0x9A, 0x02, 0x10, 0x6D, 0xDB, 0x9A, 0x01, 0x77, 0xF8, 0x75, 0x16, 0xB3}
 
-	aUrl := BString(*announceUrl)
-	pStr := BBytes(<-res)
+	tst := HashFiles(files, chunksize)
 
-	chunkSize := BUint(*pieceSize * sizeMultiplier)
-	info := map[string]BCode{
-		"pieces" : pStr,
-		"piece length" : chunkSize,
-	}
+	info["pieces"] = tst
+	info["private"] = 1
 
-	fmt.Printf("Pieces: %s\n", pStr)
+	writeFile, _ := os.Create("test2.torrent")
+	writer := bufio.NewWriter(writeFile)
+	bencode.Marshal(writer, torrentFile)
+	writer.Flush()
 
+	log(torrentFile)
 
+	// err := bencode.Unmarshal(reader, &data)
 
-	if multiFile {
-		var length int64 = 0
-		b_list := make([]BCode, filesVisited)
-		i := 0
-		// for fb := range fileList.Iter() { // TODO?
-		for fb := fileList.Front(); fb != nil; fb = fb.Next() {
-			b := fb.Value.(*fileBlock)
-			length += b.size
-			d := map[string]BCode{
-				"length": BUint(b.size),
-				"path":   BString(b.path),
-			}
-			b_list[i] = BMap(d)
-			i++
-		}
+	data2, _ := data.(map[string]interface{})
 
-		info["files"] = BList(b_list)
-		info["length"] = BUint(length)
-	} else {
-		b := fileList.Front().Value.(*fileBlock)
-		info["length"] = BUint(b.size)
-		info["name"] = BString(b.path)
-	}
-
-	m := map[string]BCode{
-		"announce": aUrl,
-		"info":     BMap(info),
-	}
-
-	if *comment != "" {
-		m["comment"] = BString(*comment)
-	}
-
-	w := bufio.NewWriter(f)
-	BMap(m).renderBCode(w)
-	w.Flush()
+	fmt.Printf("%+v\n", data2["announce"])
+	return
 }
