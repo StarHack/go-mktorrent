@@ -53,13 +53,20 @@ type TorrentFile struct {
 
 type File struct {
 	length 				int64
-	path          [1]string
+	path          []string
 }
 
 func NewFile(path string, length int64) File {
 	var file File
 	file.length = length
-	file.path[0] = path
+	//file.path[0] = path
+
+	if strings.Contains(path, "/") {
+		file.path = strings.Split(path, "/")
+	} else {
+		file.path = []string{path}
+	}
+
 	return file
 }
 
@@ -157,7 +164,11 @@ func HashFiles(files []File, chunksize int) []byte {
 	pieceBytes := 0
 
 	for _, file := range files {
-		filepath := path.Join(*directory, file.path[0])
+		filepath := path.Join(*directory, "")
+		for _, subpath := range file.path {
+			filepath = path.Join(filepath, subpath)
+		}
+
 		//filepath := path.Join("", file.path[0])
 		data, err := os.Open(filepath)
 		if err != nil {
@@ -305,7 +316,7 @@ func main() {
 	bencode.Marshal(writer, torrentFile)
 	writer.Flush()
 
-	// log(torrentFile)
+	//log(torrentFile)
 
 	// err := bencode.Unmarshal(reader, &data)
 
