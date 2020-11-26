@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"os"
+	"strings"
 	//"path/filepath"
 	bencode "github.com/jackpal/bencode-go"
 )
@@ -62,11 +63,11 @@ func NewFile(path string, length int64) File {
 	return file
 }
 
-func AddFileToList(files []File, file File) []File {
-	target := make([]File, len(files)+1)
-	copy(target, files)
-	target[len(files)] = file
-	return target
+func AddFileToList(files* []File, file File) {
+	target := make([]File, len(*files)+1)
+	copy(target, *files)
+	target[len(*files)] = file
+	*files = target
 }
 
 func NewTorrentFile() (map[string]interface{}, map[string]interface{}, []File) {
@@ -126,6 +127,27 @@ func HashFile(name string, chunksize int) []byte {
 
 	return ret
 }*/
+
+func visit(files* []File) filepath.WalkFunc {
+	return func(thepath string, info os.FileInfo, err error) error {
+			if info.IsDir() {
+				// filepath.Walk(path.Join(*directory, info.Name()), visit(files))
+				return nil
+			}
+
+			if strings.HasPrefix(info.Name(), ".DS_Store") {
+				return nil
+			}
+
+			//fmt.Println()
+			
+			//filename := info.Name()
+			filename := thepath[len(*directory) + 1:]
+
+			AddFileToList(files, NewFile(filename, info.Size()))
+			return nil
+	}
+}
 
 func HashFiles(files []File, chunksize int) []byte {
 	hash := sha1.New()
@@ -255,6 +277,8 @@ func main() {
 	info["piece length"] = chunksize
 
 	// Add all files in source directory
+	err := filepath.Walk(*directory, visit(&files))
+	/*
 	err := filepath.Walk(*directory, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
@@ -262,6 +286,7 @@ func main() {
 		files = AddFileToList(files, NewFile(info.Name(), info.Size()))
 		return nil
 	})
+	*/
 
 	if err != nil {
 		panic(err)
