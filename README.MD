@@ -1,6 +1,8 @@
 # go-mktorrent
 
-This is a fork of go-mktorrent by TODO
+This is a fork of [go-mktorrent](https://github.com/0xD3ADB33F/go-mktorrent) by **0xD3ADB33F**
+
+Unfortunately I changed quite a lot in the codebase.
 
 ## Building
 
@@ -24,5 +26,5 @@ go build .
 
 
 ```
-./go-mktorrent -a https://my-tracker.org/announce.php -t test3.torrent -d The_Inchtabokatables_-_Inchtomanie-1992-CMG -p 16384 -c "hello world" -cb "torrentClient"
+./go-mktorrent -a https://my-tracker.org/announce.php -t test3.torrent -d My_Release_Directory-GROUP -p 16384 -c "hello world" -cb "torrentClient"
 ```
