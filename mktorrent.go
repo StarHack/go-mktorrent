@@ -1,17 +1,8 @@
 package main
 
-/*
- * TODO:
- * ; The path handling could take some extra work
- *    - the current setup is a quick hack from Hades.
- * ; Eliminate the copying that goes on in the default case. If a complete slice can
- *   be stolen right off of the array, do that rather than copying.
- */
-
 import (
 	"container/list"
 	"crypto/sha1"
-	//"bytes"
 	"bufio"
 	"fmt"
 	"flag"
@@ -20,7 +11,6 @@ import (
 	"path/filepath"
 	"os"
 	"strings"
-	//"path/filepath"
 	bencode "github.com/jackpal/bencode-go"
 )
 
@@ -29,6 +19,7 @@ var (
 	announceUrl     = flag.String("a", "", "Announce URL to use")
 	torrentFilename = flag.String("t", "", "Name of the torrent file")
 	directory       = flag.String("d", "", "Source directory")
+	createdBy       = flag.String("cb", "StarHack", "Created by")
 	pieceSize       = flag.Uint("p", defaultPieceSize,
 		"Piece size to use for creating the torrent file (Kilobytes)")
 	fileList     = list.New()
@@ -59,7 +50,6 @@ type File struct {
 func NewFile(path string, length int64) File {
 	var file File
 	file.length = length
-	//file.path[0] = path
 
 	if strings.Contains(path, "/") {
 		file.path = strings.Split(path, "/")
@@ -83,73 +73,20 @@ func NewTorrentFile() (map[string]interface{}, map[string]interface{}, []File) {
 	tf["info"] = make(map[string]interface{})
 	info, _ := tf["info"].(map[string]interface{})
 
-	//info["files"] = make(map[string]interface{})
-	//files, _ := info["files"].(map[string]interface{})
 	var files []File
 	info["files"] = files
-	//files, _ := info["files"].(map[string]interface{})
 
 	return tf, info, files
 }
-/*
-func HashFile(name string, chunksize int) []byte {
-	data, err := os.Open(name)
-	if err != nil {
-		// log.Fatal("Error Reading ", filename, ": ", err)	
-	}
-	defer data.Close()
-
-	reader := bufio.NewReader(data)
-	// buffer := bytes.NewBuffer(make([]byte, 0))
-	buffer := make([]byte, chunksize)
-
-	hash := sha1.New()
-	var ret []byte
-	var sum []byte
-
-	for {
-		read, err := reader.Read(buffer);
-		if err != nil {
-			break;
-		}
-
-		hash.Write(buffer[0:read])
-		// hash.Write(buffer[0:read]) // only for testing multi file hashes
-		//str := fmt.Sprintf("% X", hash.Sum(nil))
-		sum = hash.Sum(nil)
-		ret = append(ret[:], sum[:]...)
-		hash.Reset()
-		//ret += str
-	}
-
-	// fmt.Println(part)
-
-	if err != io.EOF {
-		/// log.Fatal("Error Reading ", filename, ": ", err)	
-	} else {
-		err = nil
-	}
-
-	fmt.Println(ret)
-
-	return ret
-}*/
 
 func visit(files* []File) filepath.WalkFunc {
-	return func(thepath string, info os.FileInfo, err error) error {
-			if info.IsDir() {
-				// filepath.Walk(path.Join(*directory, info.Name()), visit(files))
+	return func(path string, info os.FileInfo, err error) error {
+			// Ignore directories (we only need to hash files) and .DS_Store files (macOS)
+			if info.IsDir() || strings.HasPrefix(info.Name(), ".DS_Store") {
 				return nil
 			}
 
-			if strings.HasPrefix(info.Name(), ".DS_Store") {
-				return nil
-			}
-
-			//fmt.Println()
-			
-			//filename := info.Name()
-			filename := thepath[len(*directory) + 1:]
+			filename := path[len(*directory) + 1:]
 
 			AddFileToList(files, NewFile(filename, info.Size()))
 			return nil
@@ -169,7 +106,6 @@ func HashFiles(files []File, chunksize int) []byte {
 			filepath = path.Join(filepath, subpath)
 		}
 
-		//filepath := path.Join("", file.path[0])
 		data, err := os.Open(filepath)
 		if err != nil {
 			fmt.Println("Error Reading ", filepath, ": ", err)	
@@ -177,10 +113,7 @@ func HashFiles(files []File, chunksize int) []byte {
 		defer data.Close()
 
 		reader := bufio.NewReader(data)
-		// buffer := bytes.NewBuffer(make([]byte, 0))
 		buffer := make([]byte, chunksize)
-
-		
 
 		for {
 			read, err := reader.Read(buffer);
@@ -204,31 +137,18 @@ func HashFiles(files []File, chunksize int) []byte {
 				// Write exceeding bytes into new piece
 				hash.Write(buffer[remainingPieceBytes:])
 				sum = hash.Sum(nil)
-				// ret = append(ret[:], sum[:]...)
-				//hash.Reset()
 
 				// Set pieceBytes to new value
 				pieceBytes = exceedingBytes
 			} else {
-
 				hash.Write(buffer[0:read])
 				sum = hash.Sum(nil)
-				// ret = append(ret[:], sum[:]...)
-				// hash.Reset()
 			}
-
-			// hash.Write(buffer[0:read]) // only for testing multi file hashes
-			//str := fmt.Sprintf("% X", hash.Sum(nil))
-			
-			
-
-			//ret += str
 		}
 
-		// fmt.Println(part)
 
 		if err != io.EOF {
-			/// log.Fatal("Error Reading ", filename, ": ", err)	
+			// log.Fatal("Error Reading " + filename + ": " + err)	
 		} else {
 			err = nil
 		}
@@ -268,36 +188,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *pieceSize % 2 != 0 || *pieceSize < 32 || *pieceSize > 16384 {
+		fmt.Fprintf(os.Stderr, "Piece size must be a power of two and be between 32 KB and 16 MiB (16384 KB).\n")
+		os.Exit(1)
+	}
 
-
-	trfile, _ := os.Open("Just_Dance_2021_Update_v322043.561500_NSW-NiiNTENDO.torrent")
-	reader := bufio.NewReader(trfile)
-	//var data interface{}
-	data, _ := bencode.Decode(reader)
-
-
-
-	chunksize := 16384 // 16777216
+	// chunksize := 16384 // 16777216
+	chunksize := int(*pieceSize * sizeMultiplier)
 
 	torrentFile, info, files := NewTorrentFile()
-	torrentFile["announce"] = "https://tntracker.org/announce.php"
-	torrentFile["created by"] = "StarHack"
+	torrentFile["announce"] = *announceUrl
+	torrentFile["created by"] = *createdBy
 	torrentFile["creation date"] = 1605292896
-	// torrentFile.info["info"] = TODO
+	torrentFile["comment"] = *comment
 	info["name"] = *directory
 	info["piece length"] = chunksize
 
 	// Add all files in source directory
 	err := filepath.Walk(*directory, visit(&files))
-	/*
-	err := filepath.Walk(*directory, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			return nil
-		}
-		files = AddFileToList(files, NewFile(info.Name(), info.Size()))
-		return nil
-	})
-	*/
 
 	if err != nil {
 		panic(err)
@@ -316,12 +224,5 @@ func main() {
 	bencode.Marshal(writer, torrentFile)
 	writer.Flush()
 
-	//log(torrentFile)
-
-	// err := bencode.Unmarshal(reader, &data)
-
-	data2, _ := data.(map[string]interface{})
-
-	fmt.Printf("%+v\n", data2["announce"])
 	return
 }
