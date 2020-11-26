@@ -135,8 +135,8 @@ func HashFiles(files []File, chunksize int) []byte {
 	pieceBytes := 0
 
 	for _, file := range files {
-		//filepath := path.Join(*directory, file.path[0])
-		filepath := path.Join("", file.path[0])
+		filepath := path.Join(*directory, file.path[0])
+		//filepath := path.Join("", file.path[0])
 		data, err := os.Open(filepath)
 		if err != nil {
 			fmt.Println("Error Reading ", filepath, ": ", err)	
@@ -253,14 +253,14 @@ func main() {
 	torrentFile["created by"] = "txtx"
 	torrentFile["creation date"] = 1605292896
 	// torrentFile.info["info"] = TODO
-	info["name"] = "MY_DIR_NAME-ANY"
+	info["name"] = *directory
 	info["piece length"] = chunksize
 
 	err := filepath.Walk(*directory, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
 		}
-		files = AddFileToList(files, NewFile(path, info.Size()))
+		files = AddFileToList(files, NewFile(info.Name(), info.Size()))
 		return nil
 	})
 
