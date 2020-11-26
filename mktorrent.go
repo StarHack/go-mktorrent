@@ -204,8 +204,6 @@ func HashFiles(files []File, chunksize int) []byte {
 
 	ret = append(ret[:], sum[:]...)
 
-	fmt.Println(ret)
-
 	return ret
 }
 
@@ -250,12 +248,13 @@ func main() {
 
 	torrentFile, info, files := NewTorrentFile()
 	torrentFile["announce"] = "https://tntracker.org/announce.php"
-	torrentFile["created by"] = "txtx"
+	torrentFile["created by"] = "StarHack"
 	torrentFile["creation date"] = 1605292896
 	// torrentFile.info["info"] = TODO
 	info["name"] = *directory
 	info["piece length"] = chunksize
 
+	// Add all files in source directory
 	err := filepath.Walk(*directory, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
@@ -268,14 +267,8 @@ func main() {
 		panic(err)
 	}
 
-	//files = AddFileToList(files, NewFile("test.txt", 5))
-	//files = AddFileToList(files, NewFile("test2.txt", 5))
+
 	info["files"] = files
-	// files[0] = NewFile("n-jd2k21_v65536.r00", 100000000)
-
-	
-
-  // tst := []byte {0x48, 0x0E, 0x8A, 0x07, 0x8B, 0xE3, 0xBE, 0x28, 0x9A, 0x02, 0x10, 0x6D, 0xDB, 0x9A, 0x01, 0x77, 0xF8, 0x75, 0x16, 0xB3}
 
 	tst := HashFiles(files, chunksize)
 
@@ -287,7 +280,7 @@ func main() {
 	bencode.Marshal(writer, torrentFile)
 	writer.Flush()
 
-	log(torrentFile)
+	// log(torrentFile)
 
 	// err := bencode.Unmarshal(reader, &data)
 
