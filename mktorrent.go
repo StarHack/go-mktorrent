@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"os"
 	"strings"
+	"time"
 	bencode "github.com/jackpal/bencode-go"
 )
 
@@ -199,7 +200,7 @@ func main() {
 	torrentFile, info, files := NewTorrentFile()
 	torrentFile["announce"] = *announceUrl
 	torrentFile["created by"] = *createdBy
-	torrentFile["creation date"] = 1605292896
+	torrentFile["creation date"] = int32(time.Now().Unix()) // -> Year-2038 problem due to conversion of int64 to int32
 	torrentFile["comment"] = *comment
 	info["name"] = *directory
 	info["piece length"] = chunksize
@@ -219,7 +220,7 @@ func main() {
 	info["pieces"] = tst
 	info["private"] = 1
 
-	writeFile, _ := os.Create("test2.torrent")
+	writeFile, _ := os.Create(*torrentFilename)
 	writer := bufio.NewWriter(writeFile)
 	bencode.Marshal(writer, torrentFile)
 	writer.Flush()
